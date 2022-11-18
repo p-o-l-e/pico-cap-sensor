@@ -2,84 +2,78 @@
 #include <stdint.h>
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
-#include "hardware/structs/clocks.h"
 
-#define SENSORS 1  // Count
-#define PIN_OUT 16 // via 1-22 MOhm 
-#define PIN_IN  17 
-
-#define max(a,b) \
-   ({ __typeof__ (a) _a = (a); \
-       __typeof__ (b) _b = (b); \
-     _a > _b ? _a : _b; })
 
 typedef struct
 {
-    uint8_t in;
-    uint8_t out;
+    uint8_t  in;  // GPIO_IN
+    uint8_t  out; // GPIO_OUT
+    uint64_t threshold;
+    bool     current;
+    bool     prior;
 
-} io;
+} sensor;
 
-static io       _sensor[SENSORS];
-static uint64_t _trigger_level[SENSORS];
-static uint8_t  _current[SENSORS];
-static uint8_t  _prior[SENSORS];
 
-void _sensors_init()
+
+void _sensors_init(sensor* o)
 {
-    for(int i = 0; i < SENSORS; i++)
-    {
-        gpio_init(_sensor[i].in);
-        gpio_init(_sensor[i].out);
-        gpio_set_dir(_sensor[i].in, GPIO_IN);
-        gpio_set_dir(_sensor[i].out, GPIO_OUT);
-        _trigger_level[i] = 0;
-        _current[i] = 0;
-        _prior[i] = 0;
-        gpio_put(_sensor[i].out, 0);
-        gpio_pull_down(_sensor[i].out);
+    gpio_init(o->in);
+    gpio_init(o->out);
+    gpio_set_dir(o->in, GPIO_IN);
+    gpio_set_dir(o->out, GPIO_OUT);
+    sleep_ms(100);
+    o->threshold = 0;
+    o->current = false;
+    o->prior = false;
+    gpio_put(o->out, 0);
+    gpio_pull_up(o->in);
+    gpio_pull_down(o->out);
 
-        gpio_set_input_hysteresis_enabled(_sensor[i].in, false);
-        gpio_set_slew_rate(_sensor[i].out, GPIO_SLEW_RATE_FAST);
-    } 
+    gpio_set_input_hysteresis_enabled(o->in, false);
+    gpio_set_slew_rate(o->out, GPIO_SLEW_RATE_FAST);
 }
 
-uint64_t _get_cap(uint8_t id)
+uint64_t _get_cap(sensor* o)
 {
     uint64_t start = time_us_64();
-    gpio_put(_sensor[id].out, 1);
-    gpio_pull_up(_sensor[id].in);
-    while(gpio_get(_sensor[id].in) == 0) {  };
-    gpio_put(_sensor[id].out, 0);
-    gpio_pull_down(_sensor[id].in);
+    gpio_put(o->out, 1);
+    gpio_pull_up(o->in);
+    while(gpio_get(o->in) == 0) {};
+
+    gpio_put(o->out, 0);
+    gpio_pull_down(o->in);
     return time_us_64() - start;
 }
 
 
-void _calibrate_sensor(uint8_t id, uint8_t sensivity)
+void _calibrate_sensor(sensor* o, double f)
 {
     for(int i = 0; i < 50; i++)
     {
-        _trigger_level[id] = max(_get_cap(id)/sensivity, _trigger_level[id]);
+        uint64_t cap = (uint64_t)((double)_get_cap(o) * f);
+        o->threshold = cap > o->threshold ? cap : o->threshold; 
     }
-    sleep_ms(100);
+    // sleep_ms(100);
 }
 
 
 
-bool sense(uint8_t id, uint8_t lag)
+bool sense(sensor* o)
 {
-    _prior[id] = _current[id];
-    _get_cap(id) > _trigger_level[id] ? _current[id] = 1 : _current[id] = 0;
+    o->prior = o->current;
+    _get_cap(o) > o->threshold ? o->current = true : o->current = false;
     bool state;
-    if (_current[id] && _prior[id]) // Switch only, if two consecutive same levels detected
+    if (o->current && o->prior)
     {
+        gpio_put(PICO_DEFAULT_LED_PIN, 1);
         state = 1;
     }
-    else if ((!_current[id]) && (!_prior[id]))
+    else if ((!o->current) && (!o->prior))
     {
+        gpio_put(PICO_DEFAULT_LED_PIN, 0);
         state = 0;
     }
-    sleep_ms(lag);
+    sleep_ms(10);
     return state;
 }
