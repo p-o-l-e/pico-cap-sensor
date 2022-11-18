@@ -1,1 +1,1 @@
-# pico-cap-sensor
+# Simple capacitive touch sensor for RP2040
